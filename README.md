@@ -28,3 +28,5 @@ npx wrangler dev --port 8790
 ```bash
 node tests/e2e.mjs http://127.0.0.1:8790
 ```
+
+Aplicatia iOS se construieste din repo-ul privat app-echipamente (ios-nis2), unde sunt secretele de semnare.

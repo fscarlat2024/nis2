@@ -5,7 +5,9 @@ import { MEASURES, BASE_MEASURE, STARTER_TASKS, SECTORS, classify, INCIDENT_KIND
 import { sendToUsers } from './push.js';
 
 const SESSION_DAYS = 30;
-const TRIAL_DAYS = 14; // de confirmat de Florin
+// Lansare gratuita (decizia lui Florin, 5 nov 2026): toate functiile sunt incluse pana apare plata prin magazine.
+const FREE_LAUNCH = true;
+const TRIAL_DAYS = 14;
 const MAX_FILE = 1_900_000; // limita unui rand D1
 const FILE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'text/plain',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -25,6 +27,7 @@ export default {
     const url = new URL(req.url);
     try {
       if (url.pathname.startsWith('/r/')) return await reportPage(env, url.pathname.slice(3));
+      if (url.pathname.startsWith('/f/')) return await filePage(env, url.pathname.slice(3));
       if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
       return await route(req, env, url, ctx);
     } catch (e) {
@@ -118,7 +121,7 @@ const ipOf = (req) => req.headers.get('cf-connecting-ip') || 'local';
 async function clearLimit(env, key) { await env.DB.prepare('DELETE FROM rate_limits WHERE key = ?').bind(key).run(); }
 
 // ---------- sesiune ----------
-const mfaRequired = (role) => role !== 'angajat';
+const mfaRequired = (u) => u.role !== 'angajat' && !u.mfa_exempt;
 async function createSession(env, userId, mfaOk) {
   const token = randomHex();
   await env.DB.prepare('INSERT INTO sessions (token_hash, user_id, mfa_ok, expires_at) VALUES (?,?,?,?)')
@@ -130,7 +133,7 @@ async function sessionUser(req, env) {
   if (!m) fail(401, 'Neautentificat', 'auth');
   const hash = await sha256(m[1]);
   const u = await env.DB.prepare(
-    `SELECT u.id, u.company_id, u.email, u.name, u.role, u.totp_on, u.totp_secret, u.totp_last_step, s.mfa_ok, s.token_hash
+    `SELECT u.id, u.company_id, u.email, u.name, u.role, u.mfa_exempt, u.totp_on, u.totp_secret, u.totp_last_step, s.mfa_ok, s.token_hash
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ? AND s.expires_at > ? AND u.active = 1`).bind(hash, Date.now()).first();
   if (!u) fail(401, 'Sesiunea a expirat', 'auth');
@@ -139,14 +142,14 @@ async function sessionUser(req, env) {
 async function auth(req, env) {
   const u = await sessionUser(req, env);
   if (u.totp_on && !u.mfa_ok) fail(403, 'Introduceți codul de autentificare', 'mfa_verify');
-  if (!u.totp_on && mfaRequired(u.role)) fail(403, 'Activați autentificarea cu doi factori', 'mfa_setup');
+  if (!u.totp_on && mfaRequired(u)) fail(403, 'Activați autentificarea cu doi factori', 'mfa_setup');
   if (u.company_id) u.company = await env.DB.prepare('SELECT * FROM companies WHERE id = ?').bind(u.company_id).first();
   return u;
 }
 const isManager = (u) => u.role === 'responsabil' || u.role === 'conducere';
 const needManager = (u) => { if (!isManager(u)) fail(403, 'Doar responsabilul sau conducerea pot face asta'); };
 const needCompany = (u) => { if (!u.company) fail(403, 'Cont fără firmă'); };
-function entitled(c) { const n = Date.now(); return !!c && ((c.paid_until || 0) > n || (c.trial_until || 0) > n); }
+function entitled(c) { if (FREE_LAUNCH && c) return true; const n = Date.now(); return !!c && ((c.paid_until || 0) > n || (c.trial_until || 0) > n); }
 const needPaid = (u) => { if (!entitled(u.company)) fail(402, 'Funcția este inclusă în abonament. Porniți perioada de probă.', 'plan'); };
 async function audit(env, u, action, target) {
   await env.DB.prepare('INSERT INTO audit_log (company_id, user_id, user_label, action, target, at) VALUES (?,?,?,?,?,?)')
@@ -197,7 +200,7 @@ async function route(req, env, url, ctx) {
   if (parts[0] === 'company') return company(req, env, u, parts[1]);
   if (p === 'dashboard' && m === 'GET') return dashboard(env, u);
   if (parts[0] === 'tasks') return tasks(req, env, u, id);
-  if (parts[0] === 'evidence') return evidence(req, env, u, url, id);
+  if (parts[0] === 'evidence') return evidence(req, env, u, url, id, parts[2]);
   if (parts[0] === 'team') return team(req, env, u, id, parts[2]);
   if (parts[0] === 'invites') return invites(req, env, u);
   if (parts[0] === 'policies') return policies(req, env, u, id, parts[2]);
@@ -276,7 +279,7 @@ async function join(req, env) {
     .bind(inv.company_id, email, person, inv.role, await hashPassword(b.password), Date.now()).first();
   await env.DB.prepare('UPDATE invites SET used_by = ? WHERE code_hash = ?').bind(us.id, inv.code_hash).run();
   await audit(env, { company_id: inv.company_id, id: us.id, name: person }, 'Cont creat din invitație', inv.role);
-  return json({ token: await createSession(env, us.id, false), next: mfaRequired(inv.role) ? 'mfa_setup' : 'app' }, 201);
+  return json({ token: await createSession(env, us.id, false), next: mfaRequired({ role: inv.role }) ? 'mfa_setup' : 'app' }, 201);
 }
 async function login(req, env) {
   const b = await body(req);
@@ -288,7 +291,7 @@ async function login(req, env) {
   const ok = await verifyPassword(String(b.password || ''), u ? u.pass_hash : 'pbkdf2$100000$AAAAAAAAAAAAAAAAAAAAAA==$x');
   if (!u || !ok) fail(401, 'Email sau parolă greșite');
   await clearLimit(env, 'login:' + email);
-  const next = u.totp_on ? 'mfa_verify' : mfaRequired(u.role) ? 'mfa_setup' : 'app';
+  const next = u.totp_on ? 'mfa_verify' : mfaRequired(u) ? 'mfa_setup' : 'app';
   return json({ token: await createSession(env, u.id, false), next });
 }
 async function mfa(req, env, action) {
@@ -362,6 +365,27 @@ async function deleteAccount(req, env, u) {
   return json({ ok: true });
 }
 
+async function deleteCompanyData(env, C) {
+  // foreign keys ON DELETE CASCADE sterg tot; le stergem si explicit, ca D1 sa nu depinda de PRAGMA
+  const U = `(SELECT id FROM users WHERE company_id = ${Number(C)})`;
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM sessions WHERE user_id IN ${U}`),
+    env.DB.prepare(`DELETE FROM push_subs WHERE user_id IN ${U}`),
+    env.DB.prepare(`DELETE FROM recovery_codes WHERE user_id IN ${U}`),
+    env.DB.prepare(`DELETE FROM policy_reads WHERE policy_id IN (SELECT id FROM policies WHERE company_id = ?)`).bind(C),
+    env.DB.prepare('DELETE FROM evidence WHERE company_id = ?').bind(C),
+    env.DB.prepare('DELETE FROM incidents WHERE company_id = ?').bind(C),
+    env.DB.prepare('DELETE FROM tasks WHERE company_id = ?').bind(C),
+    env.DB.prepare('DELETE FROM policies WHERE company_id = ?').bind(C),
+    env.DB.prepare('DELETE FROM invites WHERE company_id = ?').bind(C),
+    env.DB.prepare('DELETE FROM report_links WHERE company_id = ?').bind(C),
+    env.DB.prepare('DELETE FROM file_links WHERE company_id = ?').bind(C),
+    env.DB.prepare('DELETE FROM audit_log WHERE company_id = ?').bind(C),
+    env.DB.prepare('DELETE FROM users WHERE company_id = ?').bind(C),
+    env.DB.prepare('DELETE FROM companies WHERE id = ?').bind(C),
+  ]);
+}
+
 // ---------- firma ----------
 async function company(req, env, u, action) {
   const m = req.method;
@@ -382,24 +406,7 @@ async function company(req, env, u, action) {
     const row = await env.DB.prepare('SELECT pass_hash FROM users WHERE id = ?').bind(u.id).first();
     if (!await verifyPassword(String(b.password || ''), row.pass_hash)) fail(400, 'Parola este greșită');
     if (str(b.confirm, 200) !== u.company.name) fail(400, 'Scrieți exact numele firmei ca să confirmați');
-    // foreign keys ON DELETE CASCADE sterg tot; le stergem si explicit, ca D1 sa nu depinda de PRAGMA
-    const C = u.company_id;
-    const U = `(SELECT id FROM users WHERE company_id = ${Number(C)})`;
-    await env.DB.batch([
-      env.DB.prepare(`DELETE FROM sessions WHERE user_id IN ${U}`),
-      env.DB.prepare(`DELETE FROM push_subs WHERE user_id IN ${U}`),
-      env.DB.prepare(`DELETE FROM recovery_codes WHERE user_id IN ${U}`),
-      env.DB.prepare(`DELETE FROM policy_reads WHERE policy_id IN (SELECT id FROM policies WHERE company_id = ?)`).bind(C),
-      env.DB.prepare('DELETE FROM evidence WHERE company_id = ?').bind(C),
-      env.DB.prepare('DELETE FROM incidents WHERE company_id = ?').bind(C),
-      env.DB.prepare('DELETE FROM tasks WHERE company_id = ?').bind(C),
-      env.DB.prepare('DELETE FROM policies WHERE company_id = ?').bind(C),
-      env.DB.prepare('DELETE FROM invites WHERE company_id = ?').bind(C),
-      env.DB.prepare('DELETE FROM report_links WHERE company_id = ?').bind(C),
-      env.DB.prepare('DELETE FROM audit_log WHERE company_id = ?').bind(C),
-      env.DB.prepare('DELETE FROM users WHERE company_id = ?').bind(C),
-      env.DB.prepare('DELETE FROM companies WHERE id = ?').bind(C),
-    ]);
+    await deleteCompanyData(env, u.company_id);
     return json({ ok: true });
   }
   if (action === 'assess' && m === 'POST') {
@@ -418,9 +425,9 @@ async function company(req, env, u, action) {
     const plan = b.plan;
     if (!['evaluare', 'firma', 'consultant'].includes(plan)) fail(400, 'Plan invalid');
     let trial = u.company.trial_until;
-    if (plan !== 'evaluare' && !trial) trial = Date.now() + TRIAL_DAYS * 86400000; // o singura perioada de proba per firma
+    if (!FREE_LAUNCH && plan !== 'evaluare' && !trial) trial = Date.now() + TRIAL_DAYS * 86400000; // o singura perioada de proba per firma
     await env.DB.prepare('UPDATE companies SET plan = ?, trial_until = ? WHERE id = ?').bind(plan, trial, u.company_id).run();
-    await audit(env, u, 'Plan ales', plan);
+    await audit(env, u, plan === 'consultant' ? 'Acces consultant permis' : 'Acces consultant oprit', plan);
     return json({ ok: true, trial_until: trial });
   }
   fail(404, 'Nu există');
@@ -526,7 +533,7 @@ async function tasks(req, env, u, id) {
 }
 
 // ---------- dovezi ----------
-async function evidence(req, env, u, url, id) {
+async function evidence(req, env, u, url, id, linkAction) {
   const m = req.method;
   if (!id && m === 'POST') {
     const q = url.searchParams;
@@ -549,6 +556,12 @@ async function evidence(req, env, u, url, id) {
   if (!e) fail(404, 'Fișierul nu există');
   if (e.task_id) await ownTask(env, u, e.task_id);
   if (e.incident_id) await ownIncident(env, u, e.incident_id);
+  if (linkAction === 'link' && m === 'POST') {
+    const token = randomHex();
+    await env.DB.prepare('INSERT INTO file_links (token_hash, evidence_id, company_id, expires_at) VALUES (?,?,?,?)').bind(await sha256(token), id, u.company_id, Date.now() + 5 * 60000).run();
+    await audit(env, u, 'Dovadă deschisă', e.filename);
+    return json({ url: `${url.origin}/f/${token}` });
+  }
   if (m === 'GET') {
     return new Response(new Uint8Array(e.blob), { headers: {
       'content-type': e.mime, 'content-disposition': `attachment; filename="${encodeURIComponent(e.filename)}"`,
@@ -803,6 +816,17 @@ ${s.measures.map((m) => `<tr><td>(${m.id})</td><td>${esc(m.full)}</td><td>${m.do
   return new Response(html, { headers });
 }
 
+async function filePage(env, token) {
+  const none = () => new Response('Linkul a expirat.', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
+  if (!/^[a-f0-9]{64}$/.test(token)) return none();
+  const l = await env.DB.prepare('SELECT evidence_id, company_id FROM file_links WHERE token_hash = ? AND expires_at > ?').bind(await sha256(token), Date.now()).first();
+  if (!l) return none();
+  const e = await env.DB.prepare('SELECT filename, mime, blob FROM evidence WHERE id = ? AND company_id = ?').bind(l.evidence_id, l.company_id).first();
+  if (!e) return none();
+  const inline = /^(image\/(jpeg|png|webp)|application\/pdf)$/.test(e.mime);
+  return new Response(new Uint8Array(e.blob), { headers: { 'content-type': e.mime, 'content-disposition': `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(e.filename)}"`, 'x-content-type-options': 'nosniff', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox", 'referrer-policy': 'no-referrer' } });
+}
+
 // ---------- notificari ----------
 async function push(req, env, u, action) {
   const m = req.method;
@@ -859,6 +883,7 @@ export async function runReminders(env, now = Date.now()) {
     }
   }
   await env.DB.prepare('DELETE FROM report_links WHERE expires_at < ?').bind(now).run();
+  await env.DB.prepare('DELETE FROM file_links WHERE expires_at < ?').bind(now).run();
   await env.DB.prepare('DELETE FROM sessions WHERE expires_at < ?').bind(now).run();
   await env.DB.prepare('DELETE FROM rate_limits WHERE reset_at < ?').bind(now).run();
   return { sent };
@@ -869,7 +894,7 @@ async function panel(env, u, what, id) {
   if (u.role !== 'consultant') fail(403, 'Doar pentru consultanți');
   if (what !== 'companies') fail(404, 'Nu există');
   const now = Date.now();
-  const scope = "plan = 'consultant' AND (COALESCE(paid_until,0) > ?1 OR COALESCE(trial_until,0) > ?1)";
+  const scope = FREE_LAUNCH ? "plan = 'consultant' AND ?1 > 0" : "plan = 'consultant' AND (COALESCE(paid_until,0) > ?1 OR COALESCE(trial_until,0) > ?1)";
   if (!id) {
     const rows = (await env.DB.prepare(`SELECT id, name, cui, classification, trial_until, paid_until FROM companies WHERE ${scope} ORDER BY name`).bind(now).all()).results;
     const today = new Date(now).toISOString().slice(0, 10);
@@ -891,6 +916,29 @@ async function panel(env, u, what, id) {
   return json({ company: companyOut(c), ...s, open_tasks: open, incidents: inc.map((i) => incidentOut(i, false)) });
 }
 
+// Cont demonstrativ pentru verificarea Apple: fara MFA, cu date de exemplu. Se recreeaza la fiecare apel.
+async function demoCompany(env) {
+  const email = 'review@nis2-demo.ro', staffMail = 'angajat@nis2-demo.ro';
+  const old = await env.DB.prepare('SELECT company_id FROM users WHERE email = ?').bind(email).first();
+  if (old) await deleteCompanyData(env, old.company_id);
+  const password = randomCode(16), now = Date.now(), name = 'Firma Demo SRL';
+  const c = await env.DB.prepare("INSERT INTO companies (cui, name, sector, employees, turnover, classification, plan, incident_email, created_at) VALUES ('14399840',?,'alimentar','50-249','10-50','importanta','firma',?,?) RETURNING id").bind(name, email, now).first();
+  const mk = async (mail, who, role) => (await env.DB.prepare('INSERT INTO users (company_id, email, name, role, pass_hash, mfa_exempt, created_at) VALUES (?,?,?,?,?,1,?) RETURNING id').bind(c.id, mail, who, role, await hashPassword(password), now).first()).id;
+  const boss = await mk(email, 'Andrei Popescu', 'conducere');
+  const staff = await mk(staffMail, 'Maria Ionescu', 'angajat');
+  await seedCompany(env, c.id, name);
+  const day = (n) => new Date(now + n * 86400000).toISOString().slice(0, 10);
+  const stmts = [];
+  for (const [title, due] of [['Activați MFA pentru administratori', 2], ['Testați restaurarea din backup', 6], ['Faceți lista furnizorilor critici', 12]]) stmts.push(env.DB.prepare('UPDATE tasks SET due_on = ?, assignee_id = ? WHERE company_id = ? AND title = ?').bind(day(due), boss, c.id, title));
+  for (const m of ['a', 'b', 'g', 'h', 'i']) stmts.push(env.DB.prepare("UPDATE tasks SET status = 'finalizata', done_at = ?, done_by = ? WHERE company_id = ? AND id IN (SELECT id FROM tasks WHERE company_id = ? AND measure = ? ORDER BY sort LIMIT 2)").bind(now, boss, c.id, c.id, m));
+  stmts.push(env.DB.prepare("UPDATE policies SET status = 'aprobata', approved_by = ?, approved_at = ? WHERE company_id = ? AND sort < 4").bind(boss, now, c.id));
+  stmts.push(env.DB.prepare("UPDATE policies SET status = 'asteapta' WHERE company_id = ? AND sort = 4").bind(c.id));
+  stmts.push(env.DB.prepare("INSERT INTO incidents (company_id, seq, kind, details, reported_by, reported_at, significant, aware_at) VALUES (?, 1, 'Email suspect', 'Am primit un e-mail cu o factură și am deschis atașamentul.', ?, ?, 1, ?)").bind(c.id, staff, now - 5 * 3600000, now - 5 * 3600000));
+  await env.DB.batch(stmts);
+  await audit(env, { company_id: c.id, id: boss, name: 'Andrei Popescu' }, 'Firmă demonstrativă creată');
+  return json({ email, staff_email: staffMail, password });
+}
+
 // ---------- administrare prin cheie (doar din uneltele locale) ----------
 async function ops(req, env, parts) {
   const key = req.headers.get('x-ops-key') || '';
@@ -908,6 +956,7 @@ async function ops(req, env, parts) {
     await env.DB.prepare('INSERT INTO users (company_id, email, name, role, pass_hash, created_at) VALUES (NULL,?,?,?,?,?)').bind(email, str(b.name, 120) || email, 'consultant', await hashPassword(temp), Date.now()).run();
     return json({ email, temp_password: temp });
   }
+  if (parts[0] === 'demo') return demoCompany(env);
   if (parts[0] === 'paid') {
     const until = Number(b.until);
     if (!until) fail(400, 'Dată invalidă');

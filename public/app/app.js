@@ -145,20 +145,6 @@ async function viewAssess() {
     <label class="check"><input type="checkbox" name="special" ${c.special ? 'checked' : ''}> <span>Oferim DNS, domenii de nivel superior, servicii de încredere sau comunicații electronice publice.</span></label>
     <button class="btn">Vedeți rezultatul</button></form><div id="result"></div>`);
 }
-function viewPlan() {
-  const c = me.company;
-  const tr = meta.trial_days;
-  const used = !!c.trial_until;
-  plain(`<span class="eyebrow">ABONAMENT</span><h1>Alegeți cum lucrați</h1>
-  <section class="card"><div class="row"><h2>Evaluare</h2><span class="mono">Gratuit</span></div><p class="muted">Încadrare, scor și lista de pași. Un singur utilizator. Raportarea incidentelor rămâne disponibilă.</p>
-    <button class="btn ghost" data-act="plan" data-plan="evaluare">Continuați gratuit</button></section>
-  <section class="card strong"><div class="row"><h2>Firmă</h2></div>
-    <ul class="muted"><li>Toți angajații, pe roluri</li><li>Sarcini, dovezi și politici de adaptat</li><li>Incidente cu alerte pentru termene</li><li>Raport oricând</li></ul>
-    <button class="btn" data-act="plan" data-plan="firma">${used ? 'Alegeți Firmă' : `Începeți cu ${tr} zile gratuit`}</button></section>
-  <section class="card"><div class="row"><h2>Firmă + consultant</h2></div><p class="muted">Tot ce include Firmă, plus un consultant NCS care vă poate vedea stadiul, sarcinile și incidentele. Acordați acest acces alegând planul și îl retrageți schimbând planul.</p>
-    <button class="btn ghost" data-act="plan" data-plan="consultant">${used ? 'Alegeți cu consultant' : `Începeți cu ${tr} zile gratuit`}</button></section>
-  <p class="small muted center">Perioada de probă nu cere card. Prețul vă va fi afișat înainte de orice plată.</p>`);
-}
 
 // ---------- panou ----------
 function ring(pct) {
@@ -182,7 +168,6 @@ async function viewDashboard() {
   ${mgr ? `<section class="card score">${ring(d.score)}<div><strong class="big">${label}</strong><span class="muted">${d.counts.partial} măsuri în lucru, ${d.counts.none} neîncepute, ${d.counts.complete} complete</span><a href="#masuri">Vedeți măsurile</a></div></section>` : ''}
   <a class="btn danger" href="#incident-nou">${icon('alert')}Raportați un incident</a>
   ${mgr && !d.company.classification ? `<a class="row-card note" href="#incadrare"><span class="grow"><strong>Verificați dacă se aplică NIS2</strong><span class="small muted">Durează un minut</span></span></a>` : ''}
-  ${mgr && !d.company.entitled ? `<a class="row-card note" href="#abonament"><span class="grow"><strong>Sunteți pe planul gratuit</strong><span class="small muted">Porniți perioada de probă pentru echipă, dovezi, politici și raport</span></span></a>` : ''}
   ${d.incidents.length ? `<h2>Incidente deschise</h2>${d.incidents.map(incRow).join('')}` : ''}
   ${d.to_approve.length ? `<h2>De aprobat</h2>${d.to_approve.map((p) => `<a class="row-card" href="#politica/${p.id}"><span class="grow"><strong>${esc(p.title)}</strong></span></a>`).join('')}` : ''}
   ${d.to_read ? `<a class="row-card" href="#politici"><span class="grow"><strong>${d.to_read} ${d.to_read === 1 ? 'politică de citit' : 'politici de citit'}</strong></span></a>` : ''}
@@ -223,7 +208,7 @@ async function viewTask(id) {
   ${t.files.map((f) => `<div class="file"><button class="link grow left" data-act="open-file" data-id="${f.id}" data-name="${esc(f.filename)}" data-mime="${esc(f.mime)}">${esc(f.filename)}</button><span class="small muted">${esc(f.by_name || '')}</span>${mgr ? `<button class="link danger-text" data-act="del-file" data-id="${f.id}" aria-label="Ștergeți ${esc(f.filename)}">Ștergeți</button>` : ''}</div>`).join('') || '<p class="muted small">Nu există dovezi încă.</p>'}
   ${paid ? `<div class="grid2">
     <label class="btn ghost">Faceți o poză<input type="file" class="vh" accept="image/*" capture="environment" data-upload="task_id=${t.id}"></label>
-    <label class="btn ghost">Alegeți un fișier<input type="file" class="vh" accept="image/*,.pdf,.txt,.docx,.xlsx" data-upload="task_id=${t.id}"></label></div>` : `<p class="small muted">Dovezile sunt incluse în abonament. <a href="#abonament">Vedeți opțiunile</a></p>`}
+    <label class="btn ghost">Alegeți un fișier<input type="file" class="vh" accept="image/*,.pdf,.txt,.docx,.xlsx" data-upload="task_id=${t.id}"></label></div>` : `<p class="small muted">Dovezile sunt incluse în abonament.</p>`}
   <div class="gap"></div>
   <button class="btn ${done ? 'ghost' : ''}" data-act="task-status" data-id="${t.id}" data-status="${done ? 'deschisa' : 'finalizata'}">${done ? 'Redeschideți sarcina' : 'Marcați ca finalizată'}</button>`, 'masuri');
 }
@@ -232,7 +217,7 @@ async function viewTask(id) {
 const PST = { ciorna: ['Ciornă', 'amber'], asteapta: ['De aprobat', 'amber'], aprobata: ['Aprobată', 'blue'] };
 async function viewPolicies() {
   if (!me.company.entitled) {
-    screen(`<header class="top"><div><h1>Politici</h1></div></header><p class="muted">Modelele de politici, aprobarea și evidența citirii sunt incluse în abonament.</p>${me.user.role === 'angajat' ? '' : '<a class="btn" href="#abonament">Vedeți opțiunile</a>'}`, 'politici');
+    screen(`<header class="top"><div><h1>Politici</h1></div></header><p class="muted">Modelele de politici, aprobarea și evidența citirii sunt incluse în abonament.</p>`, 'politici');
     return;
   }
   const d = await api('policies');
@@ -327,7 +312,7 @@ async function viewReport() {
   const d = await api('dashboard');
   if (d.user.role === 'angajat') return go('panou');
   if (!d.company.entitled) {
-    screen(`<header class="top"><div><h1>Raport NIS2</h1></div></header><p class="muted">Raportul este inclus în abonament.</p><a class="btn" href="#abonament">Vedeți opțiunile</a>`, 'raport');
+    screen(`<header class="top"><div><h1>Raport NIS2</h1></div></header><p class="muted">Raportul este inclus în abonament.</p>`, 'raport');
     return;
   }
   screen(`<header class="top"><div><h1>Raport NIS2</h1><span class="muted">Pentru conducere sau pentru un auditor</span></div></header>
@@ -346,12 +331,10 @@ async function viewAudit() {
 function viewAccount() {
   const u = me.user, c = me.company;
   const mgr = u.role !== 'angajat';
-  const planName = { evaluare: 'Evaluare gratuită', firma: 'Firmă', consultant: 'Firmă + consultant' }[c.plan];
-  const until = c.paid_until > Date.now() ? 'Activ până la ' + fmt(c.paid_until) : c.trial_until > Date.now() ? 'Probă până la ' + fmt(c.trial_until) : c.plan !== 'evaluare' ? 'Perioada de probă s-a încheiat' : '';
   screen(`${back('panou', 'Înapoi')}<h1>Contul meu</h1><p class="muted">${esc(u.name)}, ${esc(ROLE[u.role])}<br>${esc(u.email)}<br>${esc(c.name)}</p>
   ${mgr ? `<a class="row-card" href="#echipa"><span class="grow"><strong>Echipă și invitații</strong></span></a>
   <a class="row-card" href="#incadrare"><span class="grow"><strong>Încadrare NIS2</strong></span></a>
-  <a class="row-card" href="#abonament"><span class="grow"><strong>Abonament: ${esc(planName)}</strong><span class="small muted">${esc(until)}</span></span></a>` : ''}
+  <label class="check card"><input type="checkbox" data-act-change="consultant" ${c.plan === 'consultant' ? 'checked' : ''}> <span><strong>Permiteți accesul consultantului NCS</strong><br><span class="small muted">Consultantul poate vedea stadiul, sarcinile și incidentele firmei. Fiecare consultare apare în jurnal. Puteți opri accesul oricând.</span></span></label>` : ''}
   <button class="row-card as-btn" data-act="push-on"><span class="grow"><strong>Activați notificările</strong><span class="small muted">Pentru incidente și termene</span></span></button>
   <h2>Schimbați parola</h2><form data-form="password" novalidate>${field('old', 'Parola actuală', '<input id="old" name="old" type="password" autocomplete="current-password" required>')}${field('new', 'Parola nouă', '<input id="new" name="new" type="password" autocomplete="new-password" minlength="10" required>')}<button class="btn ghost">Schimbați parola</button></form>
   <div class="gap"></div><button class="btn ghost" data-act="logout">Ieșiți din cont</button><div class="gap"></div>
@@ -365,7 +348,7 @@ async function viewTeam() {
   <div id="member-box"></div>
   <h2>Invitați o persoană</h2>
   ${me.company.entitled ? `<form data-form="invite" novalidate>${field('label', 'Pentru cine (opțional)', '<input id="label" name="label">')}${field('role', 'Rol', '<select id="role" name="role"><option value="angajat">Angajat</option><option value="responsabil">Responsabil NIS2</option><option value="conducere">Conducere</option></select>')}<button class="btn">Creați codul</button></form><div id="invite-box"></div>
-  ${d.pending.length ? `<p class="small muted">${d.pending.length} ${d.pending.length === 1 ? 'invitație nefolosită' : 'invitații nefolosite'}.</p>` : ''}` : '<p class="muted">Echipa este inclusă în abonament. <a href="#abonament">Vedeți opțiunile</a></p>'}`, 'cont');
+  ${d.pending.length ? `<p class="small muted">${d.pending.length} ${d.pending.length === 1 ? 'invitație nefolosită' : 'invitații nefolosite'}.</p>` : ''}` : '<p class="muted">Echipa este inclusă în abonament.</p>'}`, 'cont');
 }
 
 // ---------- notificari native / browser ----------
@@ -430,7 +413,7 @@ const FORMS = {
     const d = formData(f); d.special = !!d.special;
     const r = await api('company/assess', { body: d });
     await loadMe();
-    $('#result').innerHTML = `<section class="card result"><span class="small blue">Rezultat orientativ</span><strong class="big">${esc(r.title)}</strong><span class="small">${esc(r.text)}</span></section><p class="small muted">Evaluarea nu este o încadrare oficială. Confirmați-o cu DNSC sau cu un consultant.</p><a class="btn" href="#${me.company.plan === 'evaluare' && !me.company.trial_until ? 'abonament' : 'panou'}">Vedeți ce urmează</a>`;
+    $('#result').innerHTML = `<section class="card result"><span class="small blue">Rezultat orientativ</span><strong class="big">${esc(r.title)}</strong><span class="small">${esc(r.text)}</span></section><p class="small muted">Evaluarea nu este o încadrare oficială. Confirmați-o cu DNSC sau cu un consultant.</p><a class="btn" href="#panou">Vedeți ce urmează</a>`;
     $('#result').scrollIntoView({ behavior: 'smooth' });
   },
   async incident(f) {
@@ -467,10 +450,11 @@ const ACTS = {
   async logout() { try { await api('logout', { method: 'POST' }); } catch {} store.token = ''; me = null; go('login'); },
   async copy(b) { try { await navigator.clipboard.writeText(b.dataset.text); toast('Copiat'); } catch { toast('Nu am putut copia. Selectați textul manual.', true); } },
   async 'after-mfa'() { await loadMe(); go(me.company && !me.company.classification && me.user.role !== 'angajat' ? 'incadrare' : 'panou'); },
-  async plan(b) { await api('company/plan', { body: { plan: b.dataset.plan } }); await loadMe(); go('panou'); },
   async 'task-status'(b) { await api('tasks/' + b.dataset.id, { method: 'PUT', body: { status: b.dataset.status } }); toast(b.dataset.status === 'finalizata' ? 'Sarcină finalizată' : 'Sarcină redeschisă'); render(); },
   async 'del-file'(b) { if (!confirm('Ștergeți fișierul?')) return; await api('evidence/' + b.dataset.id, { method: 'DELETE' }); render(); },
   async 'open-file'(b) {
+    const nb = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser;
+    if (window.NIS2_NATIVE && nb) { const r = await api(`evidence/${b.dataset.id}/link`, { method: 'POST' }); return nb.open({ url: r.url }); }
     const blob = await api('evidence/' + b.dataset.id, { blob: true });
     const url = URL.createObjectURL(new Blob([blob], { type: b.dataset.mime }));
     const a = document.createElement('a'); a.href = url; a.download = b.dataset.name; document.body.append(a); a.click(); a.remove();
@@ -483,7 +467,7 @@ const ACTS = {
   async 'inc-mark'(b) { if (b.dataset.undo && !confirm('Anulați marcarea ca trimisă?')) return; await api(`incidents/${b.dataset.id}/mark`, { body: { step: b.dataset.step, undo: !!b.dataset.undo } }); render(); },
   async 'inc-close'(b) { await api(`incidents/${b.dataset.id}/close`, { body: { reopen: !!b.dataset.reopen } }); render(); },
   async report() {
-    const native = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser;
+    const native = window.NIS2_NATIVE && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser;
     const w = native ? null : window.open('', '_blank');
     const r = await api('report/link', { method: 'POST' });
     if (native) await native.open({ url: r.url }); else if (w) w.location = r.url; else location.href = r.url;
@@ -527,6 +511,7 @@ document.addEventListener('change', async (ev) => {
       await api('tasks/' + metaForm.dataset.id, { method: 'PUT', body: { assignee_id: d.assignee_id || null, due_on: d.due_on || null } });
       toast('Salvat'); return;
     }
+    if (t.dataset.actChange === 'consultant') { await api('company/plan', { body: { plan: t.checked ? 'consultant' : 'firma' } }); await loadMe(); toast(t.checked ? 'Acces permis' : 'Acces oprit'); return; }
     if (t.dataset.actChange === 'inc-personal') { await api('incidents/' + t.dataset.id, { method: 'PUT', body: { personal_data: t.checked } }); render(); return; }
     if (t.id === 'cui' && t.value.trim()) {
       const hint = $('#cui').parentElement;
@@ -558,11 +543,11 @@ async function render() {
     if (OPEN_ROUTES[route]) return go('panou');
     if (!me.company) return;
     const views = {
-      panou: viewDashboard, incadrare: viewAssess, abonament: viewPlan, masuri: viewMeasures, masura: viewMeasure, sarcina: viewTask,
+      panou: viewDashboard, incadrare: viewAssess, masuri: viewMeasures, masura: viewMeasure, sarcina: viewTask,
       politici: viewPolicies, politica: viewPolicy, 'incident-nou': viewIncidentNew, incidente: viewIncidents, incident: viewIncident,
       raport: viewReport, jurnal: viewAudit, cont: viewAccount, echipa: viewTeam,
     };
-    if (me.user.role === 'angajat' && ['incadrare', 'abonament', 'masuri', 'masura', 'raport', 'jurnal', 'echipa'].includes(route)) return go('panou');
+    if (me.user.role === 'angajat' && ['incadrare', 'masuri', 'masura', 'raport', 'jurnal', 'echipa'].includes(route)) return go('panou');
     await (views[route] || viewDashboard)(arg);
     window.scrollTo(0, 0);
     tick(); timer = setInterval(tick, 1000);

@@ -90,10 +90,12 @@ ok((await call('company/assess', { token: A.token, body: { sector: 'altul', empl
 await call('company/assess', { token: A.token, body: { sector: 'alimentar', employees: '50-249', turnover: '10-50' } });
 
 // --- planuri: gratuit
-ok((await call('invites', { token: A.token, body: { role: 'angajat' } })).s === 402, 'invitatii doar in abonament');
-ok((await call('policies', { token: A.token })).s === 402, 'politici doar in abonament');
-const pl = await call('company/plan', { token: A.token, body: { plan: 'firma' } });
-ok(pl.d.trial_until > Date.now(), 'perioada de proba');
+ok((await call('policies', { token: A.token })).s === 200, 'lansare gratuita: politici disponibile');
+const dm = await call('ops/demo', { ops: OPS, body: {} }); ok(dm.s === 200, 'firma demo', JSON.stringify(dm.d));
+const dl0 = await call('login', { body: { email: dm.d.email, password: dm.d.password } }); ok(dl0.d.next === 'app', 'demo fara MFA');
+ok((await call('dashboard', { token: dl0.d.token })).d.score > 0, 'demo are scor');
+const dm2 = await call('ops/demo', { ops: OPS, body: {} }); ok(dm2.s === 200, 'demo se recreeaza');
+ok((await call('dashboard', { token: dl0.d.token })).s === 401, 'sesiunea demo veche dispare');
 await call('company/plan', { token: B.token, body: { plan: 'consultant' } });
 
 // --- panou si sarcini
@@ -127,6 +129,10 @@ ok((await call(`evidence?task_id=${T}&name=mare.png`, { token: A.token, raw: Buf
 const dl = await call('evidence/' + up.d.id, { token: A.token });
 ok(dl.s === 200 && Buffer.from(dl.d).equals(png), 'descarcare identica');
 ok((dl.h.get('content-disposition') || '').startsWith('attachment'), 'dovada se descarca, nu se afiseaza');
+const lk = await call(`evidence/${up.d.id}/link`, { token: A.token, method: 'POST' }); ok(lk.s === 200, 'link fisier');
+const lf = await fetch(lk.d.url.replace(/^https?:\/\/[^/]+/, BASE)); ok(lf.status === 200 && Buffer.from(await lf.arrayBuffer()).equals(png), 'fisier prin link');
+ok((await call(`evidence/${up.d.id}/link`, { token: B.token, method: 'POST' })).s === 404, 'firma B nu face link la dovada firmei A');
+ok((await fetch(BASE + '/f/' + 'a'.repeat(64))).status === 404, 'link fisier gresit');
 
 // --- izolare intre firme
 ok((await call('evidence/' + up.d.id, { token: B.token })).s === 404, 'firma B nu vede dovada firmei A');
