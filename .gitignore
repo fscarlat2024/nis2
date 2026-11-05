@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+.dev.vars
+ops-key.txt
+content/
+*.p8
+*.p12
+*.jks
+*.keystore
+.prod-secrets.json

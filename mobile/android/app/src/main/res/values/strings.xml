@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Scut NIS2</string>
+    <string name="title_activity_main">Scut NIS2</string>
+    <string name="package_name">ro.netcomm.nis2</string>
+    <string name="custom_url_scheme">ro.netcomm.nis2</string>
+</resources>

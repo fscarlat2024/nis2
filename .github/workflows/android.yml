@@ -1,0 +1,84 @@
+# Construieste aplicatia Android "Scut NIS2" (ro.netcomm.nis2) pe Linux in cloud (GitHub).
+# Rezultat (Artifacts ale rularii):
+#   scut-nis2-test.apk     - semnat cu cheia de test (debug), se instaleaza direct pe telefon pentru proba;
+#   scut-nis2-release.aab  - pentru Google Play, doar daca exista cheia de upload in secrete.
+# Pornire: GitHub -> Actions -> "Android Scut NIS2" -> Run workflow (sau automat la modificari in mobile/android sau capacitor.config.json).
+# Secrete optionale (pentru Google Play): ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD (aceeasi cheie de upload ca la Lengo).
+# Notificari: mobile/android/app/google-services.json (Firebase); fara el aplicatia merge, doar fara notificari.
+name: Android Scut NIS2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["mobile/android/**", "mobile/www/**", "mobile/capacitor.config.json", ".github/workflows/android.yml"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Dependinte + sincronizare Capacitor
+        run: |
+          npm ci
+          npx cap sync android
+
+      - name: Cheia de upload (doar pentru Google Play)
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS" ]; then echo "::notice title=cheie::Fara cheie de upload - se face doar APK-ul de test"; exit 0; fi
+          PW="$(printf '%s' "$PW" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          echo "::add-mask::$PW"
+          echo "ANDROID_KEYSTORE_PASSWORD=$PW" >> "$GITHUB_ENV"
+          echo "$KS" | tr -d ' \r\n' | base64 -d > "$RUNNER_TEMP/upload.p12"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.p12" >> "$GITHUB_ENV"
+          if ! keytool -list -keystore "$RUNNER_TEMP/upload.p12" -storetype pkcs12 -storepass "$PW" > /dev/null 2>"$RUNNER_TEMP/kt.err"; then
+            echo "::error title=cheie::Cheia nu se deschide cu ANDROID_KEYSTORE_PASSWORD. $(head -c 300 "$RUNNER_TEMP/kt.err")"; exit 1
+          fi
+
+      - name: Build APK de test (+ AAB pentru Play daca exista cheia)
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        working-directory: mobile/android
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          TASKS="assembleDebug"
+          if [ -n "$ANDROID_KEYSTORE_PATH" ]; then TASKS="$TASKS bundleRelease"; fi
+          ./gradlew --no-daemon $TASKS > "$RUNNER_TEMP/gradle.log" 2>&1 || {
+            grep -E "error:|FAILURE|What went wrong|e: |> " "$RUNNER_TEMP/gradle.log" | sort -u | head -n 25 | while IFS= read -r l; do echo "::error title=gradle::${l:0:900}"; done
+            tail -n 60 "$RUNNER_TEMP/gradle.log"
+            exit 1
+          }
+          mkdir -p "$RUNNER_TEMP/out"
+          cp app/build/outputs/apk/debug/*.apk "$RUNNER_TEMP/out/scut-nis2-test.apk"
+          if [ -n "$ANDROID_KEYSTORE_PATH" ]; then cp app/build/outputs/bundle/release/*.aab "$RUNNER_TEMP/out/scut-nis2-release.aab"; fi
+          ls -la "$RUNNER_TEMP/out"
+          echo "::notice title=android::Scut NIS2 versionCode ${{ github.run_number }} construit"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scut-nis2-android-${{ github.run_number }}
+          path: ${{ runner.temp }}/out/
+          retention-days: 30
+
+      - name: Sterge cheia
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.p12"

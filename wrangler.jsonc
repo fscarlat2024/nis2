@@ -1,0 +1,14 @@
+{
+  "name": "nis2-app",
+  "account_id": "a97df89fcc7d7f587d5a8ca5a921c6c1",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*", "/r/*"] },
+  "workers_dev": true,
+  "d1_databases": [
+    { "binding": "DB", "database_name": "nis2-app", "database_id": "aa01c74a-00cb-4314-8b1f-30114b9a052e" }
+  ],
+  // termene de incidente si sarcini: verificare la fiecare 15 minute
+  "triggers": { "crons": ["*/15 * * * *"] },
+  "observability": { "enabled": true }
+}

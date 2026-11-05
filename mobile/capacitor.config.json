@@ -1,0 +1,19 @@
+{
+  "appId": "ro.netcomm.nis2",
+  "appName": "Scut NIS2",
+  "webDir": "www",
+  "server": {
+    "url": "https://nis2-app.flscarlat.workers.dev/app/",
+    "allowNavigation": [
+      "nis2-app.flscarlat.workers.dev"
+    ]
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#0B4F6C",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "android": {
+    "backgroundColor": "#0B4F6C"
+  }
+}
