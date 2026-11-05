@@ -8,3 +8,4 @@ content/
 *.jks
 *.keystore
 .prod-secrets.json
+.demo-account.json

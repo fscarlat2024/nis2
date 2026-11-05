@@ -289,7 +289,7 @@ async function viewIncident(id) {
   ${i.significant === 1 ? `<ol class="list plainlist">
     ${stepRow('early', 'Alertă timpurie', 'În 24 de ore de la constatare', i.early_sent_at, i.deadlines.early)}
     ${stepRow('notif', 'Notificare incident', 'În 72 de ore de la constatare', i.notif_sent_at, i.deadlines.notif)}
-    ${stepRow('final', 'Raport final', 'În o lună de la notificare', i.final_sent_at, i.deadlines.final)}</ol>
+    ${stepRow('final', 'Raport final', 'Într-o lună de la notificare', i.final_sent_at, i.deadlines.final)}</ol>
     <h2>Text pregătit pentru DNSC</h2><pre class="draft">${esc(i.draft)}</pre>
     <p class="small muted">Verificați și completați textul. Transmiterea o faceți dumneavoastră, prin canalele DNSC. Numărul 1911 și platforma de raportare sunt indicate de DNSC; verificați procedura actuală pe dnsc.ro.</p>
     <button class="btn ghost" data-act="copy" data-text="${esc(i.draft)}">Copiați textul</button><div class="gap"></div>
