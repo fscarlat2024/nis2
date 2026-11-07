@@ -166,6 +166,9 @@ ok((await call('policies/' + P, { token: B.token })).s === 404, 'firma B nu vede
 const inc = await call('incidents', { token: ang.token, body: { kind: 'Email suspect', details: 'Am deschis atasamentul <script>alert(1)</script>' } });
 ok(inc.s === 201 && inc.d.seq === 1, 'angajatul raporteaza', JSON.stringify(inc.d));
 const I = inc.d.id;
+ok(inc.d.notified && inc.d.notified.targets >= 1 && inc.d.notified.push === 0 && inc.d.notified.email === 0, 'raportul spune ca nu a plecat nicio alerta', JSON.stringify(inc.d.notified));
+const seen = (await call('incidents/' + I, { token: ang.token })).d;
+ok(seen.notified && seen.notified.targets >= 1 && seen.notified.email === 0 && seen.reported_by_me === true, 'angajatul vede starea reala a alertei', JSON.stringify(seen.notified));
 ok((await call('incidents', { token: ang.token })).d.items.length === 1, 'angajatul isi vede incidentul');
 ok((await call(`evidence?incident_id=${I}&name=ecran.png`, { token: ang.token, raw: png, type: 'image/png' })).s === 201, 'poza la incident');
 ok((await call('incidents/' + I, { token: ang.token, method: 'PUT', body: { significant: true } })).s === 403, 'angajatul nu evalueaza');

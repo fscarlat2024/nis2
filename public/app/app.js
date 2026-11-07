@@ -245,7 +245,7 @@ async function viewPolicy(id) {
 
 // ---------- incidente ----------
 function viewIncidentNew() {
-  plain(`${back('panou', 'Înapoi')}<h1>Ce s-a întâmplat?</h1><p class="sub">Nu trebuie să fiți sigur că e un incident. Responsabilul verifică imediat.</p>
+  plain(`${back('panou', 'Înapoi')}<h1>Ce s-a întâmplat?</h1><p class="sub">Nu trebuie să fiți sigur că e un incident. Trimitem o alertă responsabilului din firmă. Aceasta nu este o raportare către DNSC.</p>
   <form data-form="incident" novalidate>
     <fieldset class="chips"><legend class="vh-text">Tipul problemei</legend>${meta.kinds.map((k, i) => `<label class="chip"><input type="radio" name="kind" value="${esc(k)}" ${i === 0 ? 'checked' : ''}><span>${esc(k)}</span></label>`).join('')}</fieldset>
     ${field('details', 'Detalii, pe scurt', '<textarea id="details" name="details" rows="3"></textarea>')}
@@ -272,17 +272,30 @@ async function viewIncidents() {
   screen(`${me.user.role === 'angajat' ? '' : back('panou', 'Panou')}<h1>Incidente</h1><a class="btn danger" href="#incident-nou">${icon('alert')}Raportați un incident</a><div class="gap"></div>
   ${d.items.length ? d.items.map((i) => `<a class="row-card" href="#incident/${i.id}"><span class="grow"><strong>#${i.seq} ${esc(i.kind)}</strong><span class="small muted">${esc(fmt(i.reported_at))}${i.closed_at ? ', închis' : ''}</span></span><span class="small ${i.significant ? 'red' : 'muted'}">${i.significant === null ? 'De evaluat' : i.significant ? 'Semnificativ' : 'Nesemnificativ'}</span></a>`).join('') : '<p class="muted">Nu există incidente raportate.</p>'}`, me.user.role === 'angajat' ? 'incidente' : 'panou');
 }
+// Spune ce a plecat de fapt. „Trimis” nu inseamna ca responsabilul a vazut alerta.
+function alertStatus(i) {
+  const a = i.notified;
+  if (i.significant !== null || i.closed_at) return '<p class="small muted">Responsabilul a evaluat incidentul.</p>';
+  if (!a) return '<p class="note small">Incidentul este salvat în aplicație. Dacă este urgent, anunțați direct responsabilul.</p>';
+  if (!a.targets) return '';
+  if (!a.push && !a.email) return '<p class="note small"><strong class="red">Alerta nu a putut fi trimisă.</strong> Incidentul este salvat, dar responsabilul nu a fost anunțat. Anunțați-l direct, acum.</p>';
+  const parts = [];
+  if (a.push) parts.push(a.push === 1 ? 'o notificare' : a.push + ' notificări');
+  if (a.email) parts.push(a.email === 1 ? 'un e-mail' : a.email + ' e-mailuri');
+  return `<p class="note small">Am trimis ${parts.join(' și ')} către responsabil. Nu a evaluat încă incidentul. Dacă este urgent, anunțați-l direct.</p>`;
+}
 async function viewIncident(id) {
   const i = await api('incidents/' + id);
   const mgr = me.user.role !== 'angajat';
   const n = nextStep(i);
   const stepRow = (key, label, sub, sent, at) => `<li class="list-row"><span class="grow"><strong>${label}</strong><span class="small muted">${sub}</span></span>${sent ? `<button class="link small" data-act="inc-mark" data-id="${i.id}" data-step="${key}" data-undo="1">Trimis ${esc(fmt(sent))}</button>` : `<span class="mono small ${at < Date.now() ? 'red' : 'amber'}" data-count="${at}"></span>`}</li>`;
   if (!mgr) {
-    screen(`${back('incidente', 'Incidente')}<span class="eyebrow">INCIDENT #${i.seq}</span><h1>${esc(i.kind)}</h1><p class="muted">Raportat la ${esc(fmt(i.reported_at))}. Responsabilul a fost anunțat.</p><p>${esc(i.details || '')}</p>`, 'incidente');
+    screen(`${back('incidente', 'Incidente')}<span class="eyebrow">INCIDENT #${i.seq}</span><h1>${esc(i.kind)}</h1><p class="muted">Raportat la ${esc(fmt(i.reported_at))}.</p>${alertStatus(i)}<p>${esc(i.details || '')}</p>`, 'incidente');
     return;
   }
   screen(`${back('incidente', 'Incidente')}<span class="eyebrow">INCIDENT #${i.seq}${i.closed_at ? ', ÎNCHIS' : ''}</span><h1>${esc(i.kind)}</h1>
   <p class="small muted">Raportat de ${esc(i.reporter || '-')}, ${esc(fmt(i.reported_at))}</p>
+  ${i.reported_by_me && i.significant === null && i.notified && i.notified.targets ? alertStatus(i) : ''}
   ${i.significant === null ? `<section class="card strong"><h2>Este un incident semnificativ?</h2><p class="muted small">Semnificativ înseamnă, în general, perturbare gravă a serviciilor, pierderi financiare sau daune importante pentru alții. Dacă nu sunteți sigur, cereți părerea unui consultant.</p>
     <div class="grid2"><button class="btn danger" data-act="inc-sig" data-id="${i.id}" data-v="1">Da, semnificativ</button><button class="btn ghost" data-act="inc-sig" data-id="${i.id}" data-v="0">Nu</button></div></section>` : ''}
   ${n ? `<section class="timer" aria-live="off"><span>${esc(n.label)}</span><strong class="mono" data-count="${n.at}"></strong><span>din ${esc(n.of)}</span></section>` : ''}
@@ -420,7 +433,7 @@ const FORMS = {
     const d = formData(f); const photo = f.photo.files[0];
     const r = await api('incidents', { body: { kind: d.kind, details: d.details } });
     if (photo) { try { await uploadFile(photo, 'incident_id=' + r.id); } catch (e) { toast('Incidentul a fost trimis, dar poza nu: ' + e.message, true); } }
-    toast('Incidentul a fost trimis'); go('incident/' + r.id);
+    toast('Incidentul a fost salvat'); go('incident/' + r.id);
   },
   async policy(f) { await api('policies/' + f.dataset.id, { method: 'PUT', body: formData(f) }); toast('Salvat'); render(); },
   async 'inc-notes'(f) { await api('incidents/' + f.dataset.id, { method: 'PUT', body: formData(f) }); toast('Salvat'); render(); },

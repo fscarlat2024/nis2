@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS incidents (
   personal_data INTEGER NOT NULL DEFAULT 0,
   early_sent_at INTEGER, notif_sent_at INTEGER, final_sent_at INTEGER,
   closed_at INTEGER,
-  notes TEXT
+  notes TEXT,
+  notify_targets INTEGER, notify_push INTEGER, notify_email INTEGER  -- alerte trimise de fapt; NULL = fara evidenta
 );
 CREATE INDEX IF NOT EXISTS idx_incidents_company ON incidents(company_id, reported_at);
 

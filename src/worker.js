@@ -3,6 +3,7 @@
 // tokenurile si codurile se pastreaza doar ca hash; secretul TOTP e criptat cu DATA_KEY.
 import { MEASURES, BASE_MEASURE, STARTER_TASKS, SECTORS, classify, INCIDENT_KINDS } from './content.js';
 import { sendToUsers } from './push.js';
+import { sendMail, brevoKeepAlive } from './mail.js';
 
 const SESSION_DAYS = 30;
 // Lansare gratuita (decizia lui Florin, 5 nov 2026): toate functiile sunt incluse pana apare plata prin magazine.
@@ -693,8 +694,33 @@ function incidentOut(i, full) {
   const out = { id: i.id, seq: i.seq, kind: i.kind, reported_at: i.reported_at, significant: i.significant, closed_at: i.closed_at,
     aware_at: i.aware_at, personal_data: i.personal_data, early_sent_at: i.early_sent_at, notif_sent_at: i.notif_sent_at, final_sent_at: i.final_sent_at,
     deadlines: deadlines(i) };
-  if (full) { out.details = i.details; out.notes = i.notes; }
+  if (full) {
+    out.details = i.details; out.notes = i.notes;
+    out.notified = i.notify_targets === null || i.notify_targets === undefined ? null : { targets: i.notify_targets, push: i.notify_push || 0, email: i.notify_email || 0 };
+  }
   return out;
+}
+const MAIL_PER_HOUR = 10; // adresele nu sunt verificate la inregistrare: limitam ce poate declansa o firma
+const within = (p, ms, fallback) => Promise.race([p, new Promise((r) => setTimeout(() => r(fallback), ms))]);
+// Alerteaza responsabilii si adresa de incidente a firmei, pe notificare si pe e-mail, si noteaza ce a plecat de fapt.
+// E-mailul nu contine detaliile incidentului; acestea raman in aplicatie.
+async function alertIncident(env, incident, exceptUserId, msg, mailLines, ctx) {
+  const all = (await env.DB.prepare("SELECT id, email, mfa_exempt FROM users WHERE company_id = ? AND active = 1 AND role IN ('responsabil','conducere')").bind(incident.company_id).all()).results;
+  const others = all.filter((x) => x.id !== exceptUserId);
+  const co = await env.DB.prepare('SELECT name, incident_email FROM companies WHERE id = ?').bind(incident.company_id).first();
+  const skip = new Set(all.filter((x) => x.mfa_exempt || x.id === exceptUserId).map((x) => x.email.toLowerCase())); // firma demonstrativa si cel care raporteaza
+  const box = String(co.incident_email || '').toLowerCase();
+  const to = [...new Set([...others.map((x) => x.email.toLowerCase()), box].filter((x) => x && !skip.has(x)))];
+  const recent = (await env.DB.prepare('SELECT COUNT(*) AS n FROM incidents WHERE company_id = ? AND reported_at > ?').bind(incident.company_id, Date.now() - H).first()).n;
+  const pushing = sendToUsers(env, others.map((x) => x.id), msg).catch(() => ({ sent: 0 }));
+  if (ctx) ctx.waitUntil(pushing); // daca depaseste asteptarea de mai jos, trimiterea continua
+  const [p, email] = await Promise.all([
+    within(pushing, 8000, { sent: 0 }),
+    recent > MAIL_PER_HOUR ? 0 : sendMail(env, to, `${msg.title} - ${co.name}`, [`Firma: ${co.name}`, ...mailLines, '', 'Deschideți incidentul în aplicația Scut NIS2:', (env.APP_URL || 'https://nis2-app.flscarlat.workers.dev') + msg.url, '', 'Detaliile rămân în aplicație. Acest mesaj este o alertă internă și nu reprezintă o raportare către DNSC.'].join('\n')),
+  ]);
+  const sent = { targets: new Set([...others.map((x) => x.id), ...to]).size, push: p.sent || 0, email };
+  await env.DB.prepare('UPDATE incidents SET notify_targets = MAX(COALESCE(notify_targets, 0), ?), notify_push = COALESCE(notify_push, 0) + ?, notify_email = COALESCE(notify_email, 0) + ? WHERE id = ?').bind(sent.targets, sent.push, sent.email, incident.id).run();
+  return sent;
 }
 export function incidentDraft(i, companyName, cui) {
   const when = i.aware_at ? new Date(i.aware_at).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '[data și ora]';
@@ -725,15 +751,16 @@ async function incidents(req, env, u, id, action, ctx) {
     const r = await env.DB.prepare('INSERT INTO incidents (company_id, seq, kind, details, reported_by, reported_at) VALUES (?,?,?,?,?,?) RETURNING id')
       .bind(u.company_id, n.n, kind, str(b.details, 4000), u.id, Date.now()).first();
     await audit(env, u, 'Incident raportat', `#${n.n} ${kind}`);
-    const ids = (await managerIds(env, u.company_id)).filter((x) => x !== u.id);
-    ctx.waitUntil(sendToUsers(env, ids, { title: 'Incident raportat', body: `${kind}, raportat de ${u.name}. Evaluați-l acum.`, url: '/app/#incident/' + r.id, tag: 'incident-' + r.id }).catch(() => {}));
-    return json({ id: r.id, seq: n.n }, 201);
+    // Incidentul e deja salvat: o alerta esuata nu trebuie sa intoarca eroare celui care raporteaza.
+    const notified = await alertIncident(env, { id: r.id, company_id: u.company_id }, u.id, { title: 'Incident raportat', body: `${kind}, raportat de ${u.name}. Evaluați-l acum.`, url: '/app/#incident/' + r.id, tag: 'incident-' + r.id }, [`Tip: ${kind}`, `Raportat de: ${u.name}`, 'Incidentul trebuie evaluat acum.'], ctx)
+      .catch((e) => { console.log('alerta incident', String(e && e.message || e)); return { targets: 0, push: 0, email: 0, failed: true }; });
+    return json({ id: r.id, seq: n.n, notified }, 201);
   }
   const i = await ownIncident(env, u, id);
   if (!action && m === 'GET') {
     const files = (await env.DB.prepare('SELECT id, filename, mime, size FROM evidence WHERE incident_id = ? AND company_id = ? ORDER BY id').bind(id, u.company_id).all()).results;
     const by = i.reported_by ? await env.DB.prepare('SELECT name FROM users WHERE id = ?').bind(i.reported_by).first() : null;
-    const out = { ...incidentOut(i, true), reporter: by && by.name, files };
+    const out = { ...incidentOut(i, true), reporter: by && by.name, files, reported_by_me: i.reported_by === u.id };
     if (isManager(u)) out.draft = incidentDraft(i, u.company.name, u.company.cui);
     return json(out);
   }
@@ -865,12 +892,23 @@ export async function runReminders(env, now = Date.now()) {
       const marks = [[-Infinity, 0, 'a depășit termenul'], [0, H, 'mai aveți sub o oră'], [H, 4 * H, 'mai aveți sub 4 ore'], [4 * H, 12 * H, 'mai aveți sub 12 ore']];
       const hit = marks.find(([a, b]) => left > a && left <= b);
       if (hit && await once(env, `inc:${i.id}:${step}:${hit[1]}`)) {
-        await sendToUsers(env, await managerIds(env, i.company_id), { title: `Incident #${i.seq}: ${label}`, body: hit[2], url: '/app/#incident/' + i.id, tag: `incident-${i.id}-${step}` }).catch(() => {});
+        await alertIncident(env, i, null, { title: `Incident #${i.seq}: ${label}`, body: hit[2], url: '/app/#incident/' + i.id, tag: `incident-${i.id}-${step}` }, [`Pas: ${label}`, `Stare: ${hit[2]}`]).catch((e) => console.log('memento incident', String(e && e.message || e)));
         sent++;
       }
       break; // doar primul pas netrimis
     }
   }
+  // incidente pe care nu le-a evaluat nimeni: alerta se repeta dupa 1, 4 si 24 de ore
+  const waiting = (await env.DB.prepare('SELECT * FROM incidents WHERE significant IS NULL AND closed_at IS NULL').all()).results;
+  for (const i of waiting) {
+    const age = now - i.reported_at;
+    const mark = [24, 4, 1].find((x) => age >= x * H);
+    if (mark && await once(env, `inc:${i.id}:eval:${mark}`)) {
+      await alertIncident(env, i, null, { title: `Incident #${i.seq} neevaluat`, body: `${i.kind}. Nu a fost evaluat de ${mark === 1 ? 'o oră' : mark + ' ore'}.`, url: '/app/#incident/' + i.id, tag: 'incident-' + i.id }, [`Tip: ${i.kind}`, `Nu a fost evaluat de ${mark === 1 ? 'o oră' : mark + ' ore'}.`]).catch((e) => console.log('memento evaluare', String(e && e.message || e)));
+      sent++;
+    }
+  }
+  if (await once(env, 'brevo:' + new Date(now).toISOString().slice(0, 7))) await brevoKeepAlive(env).catch(() => {});
   const today = new Date(now).toISOString().slice(0, 10);
   const soon = new Date(now + 3 * 86400000).toISOString().slice(0, 10);
   const due = (await env.DB.prepare("SELECT id, company_id, title, due_on, assignee_id FROM tasks WHERE status = 'deschisa' AND due_on IS NOT NULL AND due_on <= ? LIMIT 200").bind(soon).all()).results;

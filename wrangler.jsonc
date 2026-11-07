@@ -5,6 +5,8 @@
   "compatibility_date": "2026-10-01",
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*", "/r/*", "/f/*"] },
   "workers_dev": true,
+  // expeditorul alertelor pe e-mail; domeniul trebuie autentificat in contul Brevo al cheii BREVO_API_KEY
+  "vars": { "MAIL_FROM": "suport@netcomm.ro", "APP_URL": "https://nis2-app.flscarlat.workers.dev" },
   "d1_databases": [
     { "binding": "DB", "database_name": "nis2-app", "database_id": "aa01c74a-00cb-4314-8b1f-30114b9a052e" }
   ],
