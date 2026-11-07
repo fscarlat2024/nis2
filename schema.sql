@@ -9,7 +9,10 @@ CREATE TABLE IF NOT EXISTS companies (
   trial_until INTEGER,               -- ms; perioada de proba
   paid_until INTEGER,                -- ms; setat doar dupa o plata confirmata
   incident_email TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  mail_host TEXT, mail_port INTEGER, mail_user TEXT, mail_from TEXT,
+  mail_pass TEXT,                    -- contul de e-mail al firmei; parola criptata cu DATA_KEY
+  mail_ok_at INTEGER, mail_fail_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS users (

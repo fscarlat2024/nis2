@@ -166,6 +166,18 @@ ok((await call('policies/' + P, { token: B.token })).s === 404, 'firma B nu vede
 const inc = await call('incidents', { token: ang.token, body: { kind: 'Email suspect', details: 'Am deschis atasamentul <script>alert(1)</script>' } });
 ok(inc.s === 201 && inc.d.seq === 1, 'angajatul raporteaza', JSON.stringify(inc.d));
 const I = inc.d.id;
+// --- contul de e-mail al firmei
+ok((await call('company/mail', { token: ang.token })).s === 403, 'angajatul nu vede contul de e-mail');
+ok((await call('company/mail', { token: A.token })).d.account === null, 'implicit fara cont propriu');
+const badMail = { host: 'smtp.test.ro', port: 587, user: 'x', password: 'p', from: 'x@test.ro' };
+ok((await call('company/mail', { token: A.token, body: { ...badMail, host: '127.0.0.1' } })).s === 400, 'server IP refuzat');
+ok((await call('company/mail', { token: A.token, body: { ...badMail, host: 'localhost' } })).s === 400, 'localhost refuzat');
+ok((await call('company/mail', { token: A.token, body: { ...badMail, port: 25 } })).s === 400, 'port necriptat refuzat');
+ok((await call('company/mail', { token: A.token, body: { ...badMail, password: '' } })).s === 400, 'parola obligatorie la fiecare salvare');
+ok((await call('company/mail', { token: A.token, body: { ...badMail, host: 'smtp.nu-exista-sigur.invalid' } })).s === 400, 'contul care nu merge nu se salveaza');
+ok((await call('company/mail', { token: A.token })).d.account === null, 'nimic salvat dupa testul esuat');
+ok(!JSON.stringify((await call('me', { token: A.token })).d).includes('mail_pass'), 'parola nu apare in /me');
+ok((await call('company', { token: A.token, method: 'PUT', body: { incident_email: 'alerte@test.ro' } })).s === 200 && (await call('company/mail', { token: A.token })).d.incident_email === 'alerte@test.ro', 'adresa de incidente se schimba');
 ok(inc.d.notified && inc.d.notified.targets >= 1 && inc.d.notified.push === 0 && inc.d.notified.email === 0, 'raportul spune ca nu a plecat nicio alerta', JSON.stringify(inc.d.notified));
 const seen = (await call('incidents/' + I, { token: ang.token })).d;
 ok(seen.notified && seen.notified.targets >= 1 && seen.notified.email === 0 && seen.reported_by_me === true, 'angajatul vede starea reala a alertei', JSON.stringify(seen.notified));

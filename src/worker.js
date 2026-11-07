@@ -3,7 +3,8 @@
 // tokenurile si codurile se pastreaza doar ca hash; secretul TOTP e criptat cu DATA_KEY.
 import { MEASURES, BASE_MEASURE, STARTER_TASKS, SECTORS, classify, INCIDENT_KINDS } from './content.js';
 import { sendToUsers } from './push.js';
-import { sendMail, brevoKeepAlive } from './mail.js';
+import { sendCompanyMail, brevoKeepAlive } from './mail.js';
+import { sendSmtp } from './smtp.js';
 
 const SESSION_DAYS = 30;
 // Lansare gratuita (decizia lui Florin, 5 nov 2026): toate functiile sunt incluse pana apare plata prin magazine.
@@ -400,6 +401,37 @@ async function company(req, env, u, action) {
     await audit(env, u, 'Date firmă modificate');
     return json({ ok: true });
   }
+  if (action === 'mail') {
+    needManager(u);
+    const c = u.company;
+    if (m === 'GET') return json({ incident_email: c.incident_email, account: c.mail_host ? { host: c.mail_host, port: c.mail_port, user: c.mail_user, from: c.mail_from, ok_at: c.mail_ok_at, fail_at: c.mail_fail_at } : null });
+    if (m === 'DELETE') {
+      await env.DB.prepare('UPDATE companies SET mail_host = NULL, mail_port = NULL, mail_user = NULL, mail_from = NULL, mail_pass = NULL, mail_ok_at = NULL, mail_fail_at = NULL WHERE id = ?').bind(u.company_id).run();
+      await audit(env, u, 'Cont de e-mail eliminat');
+      return json({ ok: true });
+    }
+    if (m === 'POST') {
+      await hit(env, 'mailtest:' + u.company_id, 10, H);
+      const b = await body(req);
+      const host = str(b.host, 200).toLowerCase(), port = Number(b.port), user = str(b.user, 200), from = str(b.from, 200).toLowerCase(), pass = String(b.password || '').slice(0, 300);
+      // doar nume de server public; parola se cere la fiecare salvare, ca sa nu poata fi trimisa catre alt server
+      if (!/^([a-z0-9-]+\.)+[a-z]{2,}$/.test(host)) fail(400, 'Scrieți numele serverului, de exemplu smtp.office365.com');
+      if (port !== 465 && port !== 587) fail(400, 'Portul trebuie să fie 587 sau 465');
+      if (!user || !pass) fail(400, 'Completați utilizatorul și parola');
+      if (!validEmail(from)) fail(400, 'Adresa expeditorului este invalidă');
+      const WHY = { connect: 'Nu ne-am putut conecta la server. Verificați serverul și portul.', tls: 'Serverul nu oferă o conexiune criptată validă.', auth: 'Serverul a refuzat utilizatorul sau parola. La Microsoft 365 trebuie activat SMTP AUTH pentru cont; la Gmail folosiți o parolă de aplicație.', reject: 'Serverul a refuzat mesajul. Verificați ca adresa expeditorului să aparțină contului.', timeout: 'Serverul nu a răspuns la timp.' };
+      try {
+        await sendSmtp({ host, port, user, from, pass }, u.email, 'Test Scut NIS2', 'Contul de e-mail funcționează. De aici vor pleca alertele pentru incidente.');
+      } catch (e) {
+        await audit(env, u, 'Test cont de e-mail eșuat', host);
+        return json({ ok: false, error: WHY[e.kind] || WHY.connect }, 400);
+      }
+      await env.DB.prepare('UPDATE companies SET mail_host = ?, mail_port = ?, mail_user = ?, mail_from = ?, mail_pass = ?, mail_ok_at = ?, mail_fail_at = NULL WHERE id = ?').bind(host, port, user, from, await seal(env, pass), Date.now(), u.company_id).run();
+      await audit(env, u, 'Cont de e-mail configurat', `${from} prin ${host}`);
+      return json({ ok: true, sent_to: u.email });
+    }
+    fail(405, 'Metodă invalidă');
+  }
   if (!action && m === 'DELETE') {
     needManager(u);
     const b = await body(req);
@@ -707,17 +739,24 @@ const within = (p, ms, fallback) => Promise.race([p, new Promise((r) => setTimeo
 async function alertIncident(env, incident, exceptUserId, msg, mailLines, ctx) {
   const all = (await env.DB.prepare("SELECT id, email, mfa_exempt FROM users WHERE company_id = ? AND active = 1 AND role IN ('responsabil','conducere')").bind(incident.company_id).all()).results;
   const others = all.filter((x) => x.id !== exceptUserId);
-  const co = await env.DB.prepare('SELECT name, incident_email FROM companies WHERE id = ?').bind(incident.company_id).first();
+  const co = await env.DB.prepare('SELECT name, incident_email, mail_host, mail_port, mail_user, mail_from, mail_pass FROM companies WHERE id = ?').bind(incident.company_id).first();
+  let account = null;
+  if (co.mail_host && co.mail_pass) {
+    try { account = { host: co.mail_host, port: co.mail_port, user: co.mail_user, from: co.mail_from, pass: await unseal(env, co.mail_pass) }; }
+    catch { console.log('cont e-mail firma: parola nu poate fi citita'); }
+  }
   const skip = new Set(all.filter((x) => x.mfa_exempt || x.id === exceptUserId).map((x) => x.email.toLowerCase())); // firma demonstrativa si cel care raporteaza
   const box = String(co.incident_email || '').toLowerCase();
   const to = [...new Set([...others.map((x) => x.email.toLowerCase()), box].filter((x) => x && !skip.has(x)))];
   const recent = (await env.DB.prepare('SELECT COUNT(*) AS n FROM incidents WHERE company_id = ? AND reported_at > ?').bind(incident.company_id, Date.now() - H).first()).n;
   const pushing = sendToUsers(env, others.map((x) => x.id), msg).catch(() => ({ sent: 0 }));
   if (ctx) ctx.waitUntil(pushing); // daca depaseste asteptarea de mai jos, trimiterea continua
-  const [p, email] = await Promise.all([
+  const [p, mailed] = await Promise.all([
     within(pushing, 8000, { sent: 0 }),
-    recent > MAIL_PER_HOUR ? 0 : sendMail(env, to, `${msg.title} - ${co.name}`, [`Firma: ${co.name}`, ...mailLines, '', 'Deschideți incidentul în aplicația Scut NIS2:', (env.APP_URL || 'https://nis2-app.flscarlat.workers.dev') + msg.url, '', 'Detaliile rămân în aplicație. Acest mesaj este o alertă internă și nu reprezintă o raportare către DNSC.'].join('\n')),
+    recent > MAIL_PER_HOUR ? { sent: 0, failed: 0 } : sendCompanyMail(env, account, to, `${msg.title} - ${co.name}`, [`Firma: ${co.name}`, ...mailLines, '', 'Deschideți incidentul în aplicația Scut NIS2:', (env.APP_URL || 'https://nis2-app.flscarlat.workers.dev') + msg.url, '', 'Detaliile rămân în aplicație. Acest mesaj este o alertă internă și nu reprezintă o raportare către DNSC.'].join('\n')),
   ]);
+  const email = mailed.sent;
+  if (account && to.length && recent <= MAIL_PER_HOUR) await env.DB.prepare('UPDATE companies SET mail_fail_at = ? WHERE id = ?').bind(mailed.failed ? Date.now() : null, incident.company_id).run();
   const sent = { targets: new Set([...others.map((x) => x.id), ...to]).size, push: p.sent || 0, email };
   await env.DB.prepare('UPDATE incidents SET notify_targets = MAX(COALESCE(notify_targets, 0), ?), notify_push = COALESCE(notify_push, 0) + ?, notify_email = COALESCE(notify_email, 0) + ? WHERE id = ?').bind(sent.targets, sent.push, sent.email, incident.id).run();
   return sent;

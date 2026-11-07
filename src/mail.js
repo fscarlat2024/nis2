@@ -1,5 +1,7 @@
 // E-mailuri de alerta prin Brevo (secretul BREVO_API_KEY, expeditor MAIL_FROM autentificat in Brevo).
 // Fara cheie sau expeditor nu pleaca nimic, iar functia intoarce 0: aplicatia afiseaza ce s-a trimis de fapt.
+import { sendSmtp } from './smtp.js';
+
 const brevoKey = (env) => String(env.BREVO_API_KEY || '').replace(/^﻿/, '').trim();
 
 export const mailReady = (env) => !!(brevoKey(env) && env.MAIL_FROM);
@@ -20,6 +22,17 @@ export async function sendMail(env, to, subject, text) {
     } catch (e) { console.log('brevo exc', String(e && e.message || e)); return 0; }
   };
   return (await Promise.all(to.map(one))).reduce((a, b) => a + b, 0);
+}
+
+// Cu contul firmei, daca e configurat; ce nu pleaca prin el incearca expeditorul implicit, ca alerta sa nu se piarda.
+export async function sendCompanyMail(env, account, to, subject, text, smtpOptions) {
+  if (!account) return { sent: await sendMail(env, to, subject, text), failed: 0 };
+  const results = await Promise.all(to.map((email) => sendSmtp(account, email, subject, text, smtpOptions).then(() => null, (e) => {
+    console.log('smtp firma', e.kind);
+    return email;
+  })));
+  const left = results.filter(Boolean);
+  return { sent: to.length - left.length + await sendMail(env, left, subject, text), failed: left.length };
 }
 
 // Brevo dezactiveaza cheile nefolosite 90 de zile, iar o firma fara incidente poate sta atat fara e-mailuri.

@@ -345,7 +345,8 @@ function viewAccount() {
   const u = me.user, c = me.company;
   const mgr = u.role !== 'angajat';
   screen(`${back('panou', 'Înapoi')}<h1>Contul meu</h1><p class="muted">${esc(u.name)}, ${esc(ROLE[u.role])}<br>${esc(u.email)}<br>${esc(c.name)}</p>
-  ${mgr ? `<a class="row-card" href="#echipa"><span class="grow"><strong>Echipă și invitații</strong></span></a>
+  ${mgr ? `<a class="row-card" href="#email"><span class="grow"><strong>E-mail pentru alerte</strong><span class="small muted">Contul de pe care pleacă alertele și adresa care le primește</span></span></a>
+  <a class="row-card" href="#echipa"><span class="grow"><strong>Echipă și invitații</strong></span></a>
   <a class="row-card" href="#incadrare"><span class="grow"><strong>Încadrare NIS2</strong></span></a>
   <label class="check card"><input type="checkbox" data-act-change="consultant" ${c.plan === 'consultant' ? 'checked' : ''}> <span><strong>Permiteți accesul consultantului NCS</strong><br><span class="small muted">Consultantul poate vedea stadiul, sarcinile și incidentele firmei. Fiecare consultare apare în jurnal. Puteți opri accesul oricând.</span></span></label>` : ''}
   <button class="row-card as-btn" data-act="push-on"><span class="grow"><strong>Activați notificările</strong><span class="small muted">Pentru incidente și termene</span></span></button>
@@ -354,6 +355,25 @@ function viewAccount() {
   <p class="center small"><a href="/confidentialitate.html">Confidențialitate</a></p>
   <h2>Ștergere</h2><form data-form="del-account" novalidate>${field('del_pw', 'Parola, pentru confirmare', '<input id="del_pw" name="password" type="password" autocomplete="current-password" required>')}<button class="btn ghost danger-text">Ștergeți contul meu</button></form>
   ${mgr ? `<div class="gap"></div><form data-form="del-company" novalidate><p class="small muted">Ștergerea firmei elimină definitiv toate datele: sarcini, dovezi, politici, incidente și conturi.</p>${field('confirm', 'Scrieți numele firmei', '<input id="confirm" name="confirm" autocomplete="off" required>')}${field('del_pw2', 'Parola', '<input id="del_pw2" name="password" type="password" autocomplete="current-password" required>')}<button class="btn ghost danger-text">Ștergeți firma și toate datele</button></form>` : ''}`, 'cont');
+}
+async function viewMail() {
+  const d = await api('company/mail');
+  const a = d.account;
+  screen(`${back('cont', 'Cont')}<h1>E-mail pentru alerte</h1>
+  <h2>Adresa care primește alertele</h2>
+  <form data-form="mail-box" novalidate>${field('incident_email', 'Adresa de incidente', `<input id="incident_email" name="incident_email" type="email" autocomplete="off" value="${esc(d.incident_email || '')}" required>`)}<button class="btn ghost">Salvați adresa</button></form>
+  <h2>Contul de pe care pleacă</h2>
+  ${a ? `<section class="card"><strong>${esc(a.from)}</strong><span class="small muted"><br>prin ${esc(a.host)}, port ${esc(String(a.port))}. Verificat la ${esc(fmt(a.ok_at))}.</span></section>
+  ${a.fail_at ? `<p class="note small"><strong class="red">Ultima alertă nu a plecat prin acest cont</strong> (${esc(fmt(a.fail_at))}). Verificați parola și salvați din nou contul.</p>` : ''}<div class="gap"></div>
+  <button class="btn ghost" data-act="mail-remove">Eliminați contul</button><div class="gap"></div>` : '<p class="small muted">Nu aveți un cont propriu. Alertele pleacă de la expeditorul implicit al aplicației.</p>'}
+  <form data-form="mail-account" novalidate>
+    ${field('host', 'Server SMTP', `<input id="host" name="host" autocomplete="off" autocapitalize="off" placeholder="smtp.office365.com" value="${esc(a ? a.host : '')}" required>`)}
+    ${field('port', 'Port', `<select id="port" name="port"><option value="587" ${a && a.port === 465 ? '' : 'selected'}>587 (STARTTLS)</option><option value="465" ${a && a.port === 465 ? 'selected' : ''}>465 (TLS)</option></select>`)}
+    ${field('user', 'Utilizator', `<input id="user" name="user" autocomplete="off" autocapitalize="off" value="${esc(a ? a.user : '')}" required>`)}
+    ${field('password', 'Parola contului', '<input id="password" name="password" type="password" autocomplete="new-password" required>')}
+    ${field('from', 'Adresa expeditorului', `<input id="from" name="from" type="email" autocomplete="off" value="${esc(a ? a.from : '')}" required>`)}
+    <p class="small muted">Trimitem un e-mail de test la ${esc(me.user.email)} și salvăm contul doar dacă pleacă. Parola se păstrează criptat și nu se mai afișează. Folosiți un cont dedicat alertelor. La Gmail folosiți o parolă de aplicație; la Microsoft 365 trebuie activat SMTP AUTH pentru cont.</p>
+    <button class="btn">Testați și salvați</button></form>`, 'cont');
 }
 async function viewTeam() {
   const d = await api('team');
@@ -436,6 +456,8 @@ const FORMS = {
     toast('Incidentul a fost salvat'); go('incident/' + r.id);
   },
   async policy(f) { await api('policies/' + f.dataset.id, { method: 'PUT', body: formData(f) }); toast('Salvat'); render(); },
+  async 'mail-box'(f) { await api('company', { method: 'PUT', body: formData(f) }); await loadMe(); toast('Salvat'); render(); },
+  async 'mail-account'(f) { const r = await api('company/mail', { body: formData(f) }); toast('E-mail de test trimis la ' + r.sent_to); render(); },
   async 'inc-notes'(f) { await api('incidents/' + f.dataset.id, { method: 'PUT', body: formData(f) }); toast('Salvat'); render(); },
   async password(f) { await api('password', { body: formData(f) }); toast('Parola a fost schimbată'); f.reset(); },
   async invite(f) {
@@ -477,6 +499,7 @@ const ACTS = {
   async 'policy-approve'(b) { await api(`policies/${b.dataset.id}/approve`, { method: 'POST' }); toast('Politică aprobată'); render(); },
   async 'policy-read'(b) { await api(`policies/${b.dataset.id}/read`, { method: 'POST' }); toast('Citire confirmată'); render(); },
   async 'inc-sig'(b) { const v = b.dataset.v; await api('incidents/' + b.dataset.id, { method: 'PUT', body: { significant: v === '' ? null : v === '1' } }); render(); },
+  async 'mail-remove'() { if (!confirm('Eliminați contul de e-mail? Parola salvată se șterge.')) return; await api('company/mail', { method: 'DELETE' }); toast('Cont eliminat'); render(); },
   async 'inc-mark'(b) { if (b.dataset.undo && !confirm('Anulați marcarea ca trimisă?')) return; await api(`incidents/${b.dataset.id}/mark`, { body: { step: b.dataset.step, undo: !!b.dataset.undo } }); render(); },
   async 'inc-close'(b) { await api(`incidents/${b.dataset.id}/close`, { body: { reopen: !!b.dataset.reopen } }); render(); },
   async report() {
@@ -558,9 +581,9 @@ async function render() {
     const views = {
       panou: viewDashboard, incadrare: viewAssess, masuri: viewMeasures, masura: viewMeasure, sarcina: viewTask,
       politici: viewPolicies, politica: viewPolicy, 'incident-nou': viewIncidentNew, incidente: viewIncidents, incident: viewIncident,
-      raport: viewReport, jurnal: viewAudit, cont: viewAccount, echipa: viewTeam,
+      raport: viewReport, jurnal: viewAudit, cont: viewAccount, echipa: viewTeam, email: viewMail,
     };
-    if (me.user.role === 'angajat' && ['incadrare', 'masuri', 'masura', 'raport', 'jurnal', 'echipa'].includes(route)) return go('panou');
+    if (me.user.role === 'angajat' && ['incadrare', 'masuri', 'masura', 'raport', 'jurnal', 'echipa', 'email'].includes(route)) return go('panou');
     await (views[route] || viewDashboard)(arg);
     window.scrollTo(0, 0);
     tick(); timer = setInterval(tick, 1000);
